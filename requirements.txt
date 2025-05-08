@@ -1,0 +1,6 @@
+"fastapi[standard]"
+langgraph
+langsmith
+"langchain[anthropic]"
+langchain-groq
+pydantic

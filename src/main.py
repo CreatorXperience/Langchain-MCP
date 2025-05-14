@@ -40,7 +40,7 @@ dotenv.load_dotenv(env_path)
 mcp_client: Union[MultiServerMCPClient, None] = None
 mcp_tools: Union[list, None] = None
 
-tool = TavilySearch(max_results=2)
+tool = TavilySearch(max_results=4)
 tools = [tool]
 
 
@@ -48,12 +48,15 @@ val = dotenv.get_key(
     dotenv_path=env_path,
     key_to_get="GROQ_API_KEY",
 )
+print(val)
 if not os.environ.get("GROQ_API_KEY") and val:
     os.environ["GROQ_API_KEY"] = getpass.getpass("Provide your Groq model Password :")
     sys.exit(2)
 else:
     print("loaded env variable")
-    llm = init_chat_model(model="llama3-8b-8192", model_provider="groq", api_key=val)
+    llm = init_chat_model(
+        model="llama-3.3-70b-versatile", model_provider="groq", api_key=val
+    )
     llm_with_tools = llm.bind_tools(tools)
 
 
@@ -123,41 +126,6 @@ def convert_to_markdown_node(state: State):
     return {"messages": output}
 
 
-async def connect_to_mcp_server():
-    global mcp_client, mcp_tools, App
-    try:
-        async with MultiServerMCPClient(
-            {
-                "sequential-thinking": {
-                    "command": "npx",
-                    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-                }
-            }
-        ) as client:
-            if client:
-                mcp_client = client
-                mcp_tools = client.get_tools()
-                graph.add_node("seq_thought", sequential_thinking)
-                graph.add_node("markdown", convert_to_markdown_node)
-                graph.add_node("tools", ToolNode(mcp_tools))
-                graph.add_edge(START, "seq_thought")
-                graph.add_edge("seq_thought", "markdown")
-
-                graph.add_conditional_edges(
-                    "markdown", tools_cond, {"END": END, "tools": "tools"}
-                )
-                graph.add_edge("tools", "seq_thought")
-            else:
-                print("mcp client no initialize, but moving on anyways")
-    except KeyboardInterrupt as ke:
-        print("Keyboard Interrupt", ke)
-
-
-class Chat(BaseModel):
-    text: str
-    search: Union[bool, None] = None
-
-
 class BasicToolNode:
     def __init__(self, tools: list) -> None:
         self.tools = {tool.name: tool for tool in tools}
@@ -186,7 +154,42 @@ class BasicToolNode:
         return {"messages": outputs}
 
 
-tool_node = BasicToolNode(tools)
+# tool_node = BasicToolNode(tools)
+
+
+async def connect_to_mcp_server():
+    global mcp_client, mcp_tools, App
+    try:
+        async with MultiServerMCPClient(
+            {
+                "sequential-thinking": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+                }
+            }
+        ) as client:
+            if client:
+                mcp_client = client
+                mcp_tools = [*client.get_tools(), *tools]
+                graph.add_node("seq_thought", sequential_thinking)
+                graph.add_node("markdown", convert_to_markdown_node)
+                graph.add_node("tools", BasicToolNode(mcp_tools))
+                graph.add_edge(START, "seq_thought")
+                graph.add_edge("seq_thought", "markdown")
+
+                graph.add_conditional_edges(
+                    "markdown", tools_cond, {"END": END, "tools": "tools"}
+                )
+                graph.add_edge("tools", "seq_thought")
+            else:
+                print("mcp client no initialize, but moving on anyways")
+    except KeyboardInterrupt as ke:
+        print("Keyboard Interrupt", ke)
+
+
+class Chat(BaseModel):
+    text: str
+    search: Union[bool, None] = None
 
 
 class ChatBot:
@@ -251,6 +254,7 @@ async def talk(chat: Chat):
     res = await App.ainvoke(
         {"messages": msg}, config={"configurable": {"thread_id": "1234"}}
     )
+    print(App.get_state({"configurable": {"thread_id": "1234"}}))
     return res["messages"][-1].content
 
 

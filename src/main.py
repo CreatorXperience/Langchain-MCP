@@ -39,7 +39,7 @@ env_path = f"{os.path.expanduser(root_path)}/fold/.env"
 dotenv.load_dotenv(env_path)
 mcp_client: Union[MultiServerMCPClient, None] = None
 mcp_tools: Union[list, None] = None
-
+llm_with_tools = None
 tool = TavilySearch(max_results=4)
 tools = [tool]
 
@@ -54,10 +54,7 @@ if not os.environ.get("GROQ_API_KEY") and val:
     sys.exit(2)
 else:
     print("loaded env variable")
-    llm = init_chat_model(
-        model="llama-3.3-70b-versatile", model_provider="groq", api_key=val
-    )
-    llm_with_tools = llm.bind_tools(tools)
+    llm = init_chat_model(model="llama3-8b-8192", model_provider="groq", api_key=val)
 
 
 memory = MemorySaver()
@@ -90,8 +87,7 @@ app.add_middleware(
 
 
 def sequential_thinking(state: State):
-    tools = mcp_client.get_tools()
-    return {"messages": llm.invoke(state["messages"])}
+    return {"messages": llm_with_tools.invoke(state["messages"])}
 
 
 def tools_cond(state: State):
@@ -102,7 +98,7 @@ def tools_cond(state: State):
     else:
         raise ValueError("Bad Graph State")
     if len(lst_msg.tool_calls) == 0:
-        return "END"
+        return "markdown"
     else:
         return "tools"
     # lst_msg["tool_calls"]
@@ -118,8 +114,7 @@ def convert_to_markdown_node(state: State):
 
     template = ChatPromptTemplate.from_template(template_prompt)
 
-    seq_llm_with_tools = llm.bind_tools(tools)
-    chain = template | seq_llm_with_tools
+    chain = template | llm_with_tools
 
     print(msg[1].content)
     output = chain.invoke({"text": msg[-1].content})
@@ -158,29 +153,36 @@ class BasicToolNode:
 
 
 async def connect_to_mcp_server():
-    global mcp_client, mcp_tools, App
+    global mcp_client, mcp_tools, App, llm_with_tools
     try:
         async with MultiServerMCPClient(
             {
                 "sequential-thinking": {
                     "command": "npx",
                     "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-                }
+                },
+                "gmail": {
+                    "command": "npx",
+                    "args": ["@gongrzhe/server-gmail-autoauth-mcp"],
+                },
             }
         ) as client:
             if client:
                 mcp_client = client
                 mcp_tools = [*client.get_tools(), *tools]
+                llm_with_tools = llm.bind_tools(tools)
                 graph.add_node("seq_thought", sequential_thinking)
                 graph.add_node("markdown", convert_to_markdown_node)
                 graph.add_node("tools", BasicToolNode(mcp_tools))
                 graph.add_edge(START, "seq_thought")
-                graph.add_edge("seq_thought", "markdown")
 
                 graph.add_conditional_edges(
-                    "markdown", tools_cond, {"END": END, "tools": "tools"}
+                    "seq_thought",
+                    tools_cond,
+                    {"markdown": "markdown", "tools": "tools"},
                 )
                 graph.add_edge("tools", "seq_thought")
+                graph.add_edge("markdown", END)
             else:
                 print("mcp client no initialize, but moving on anyways")
     except KeyboardInterrupt as ke:

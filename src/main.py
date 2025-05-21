@@ -116,7 +116,7 @@ def convert_to_markdown_node(state: State):
 
     chain = template | llm_with_tools
 
-    print(msg[1].content)
+    # print(msg[1].content)
     output = chain.invoke({"text": msg[-1].content})
     return {"messages": output}
 
@@ -124,7 +124,7 @@ def convert_to_markdown_node(state: State):
 class BasicToolNode:
     def __init__(self, tools: list) -> None:
         self.tools = {tool.name: tool for tool in tools}
-        print("here", self.tools)
+        # print("here", self.tools)
 
     def get_tools(self):
         return self.tools
@@ -138,6 +138,8 @@ class BasicToolNode:
         outputs = []
         for tool_call in last_msg.tool_calls:
             tool_result = self.tools[tool_call["name"]].invoke(tool_call["args"])
+            if tool_call["name"] == "install_repo_mcp_server":
+                print("here again", tool_call.args_schema.schema())
             outputs.append(
                 ToolMessage(
                     content=json.dumps(tool_result),
@@ -161,15 +163,17 @@ async def connect_to_mcp_server():
                     "command": "npx",
                     "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
                 },
-                "gmail": {
+                "mcp-installer": {
                     "command": "npx",
-                    "args": ["@gongrzhe/server-gmail-autoauth-mcp"],
+                    "args": ["@anaisbetts/mcp-installer"],
                 },
             }
         ) as client:
             if client:
                 mcp_client = client
                 mcp_tools = [*client.get_tools(), *tools]
+                for tool in mcp_tools:
+                    print(tool.name)
                 llm_with_tools = llm.bind_tools(tools)
                 graph.add_node("seq_thought", sequential_thinking)
                 graph.add_node("markdown", convert_to_markdown_node)
@@ -256,7 +260,7 @@ async def talk(chat: Chat):
     res = await App.ainvoke(
         {"messages": msg}, config={"configurable": {"thread_id": "1234"}}
     )
-    print(App.get_state({"configurable": {"thread_id": "1234"}}))
+    # print(App.get_state({"configurable": {"thread_id": "1234"}}))
     return res["messages"][-1].content
 
 

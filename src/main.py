@@ -22,6 +22,10 @@ from fastapi.responses import StreamingResponse
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.tools import tool as lang_tool
+from email.message import EmailMessage
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
 
 import subprocess
 import getpass
@@ -48,7 +52,7 @@ val = dotenv.get_key(
     dotenv_path=env_path,
     key_to_get="GROQ_API_KEY",
 )
-print(val)
+
 if not os.environ.get("GROQ_API_KEY") and val:
     os.environ["GROQ_API_KEY"] = getpass.getpass("Provide your Groq model Password :")
     sys.exit(2)
@@ -65,6 +69,26 @@ class State(TypedDict):
 
 
 graph = StateGraph(State)
+
+
+# @lang_tool
+# def read_gmail_messages():
+#     """perform any task related to the gmail service"""
+
+
+# @lang_tool
+# def write_gmail_message():
+#     pass
+
+
+# @lang_tool
+# def draft_gmail_message():
+#     pass
+
+
+# @lang_tool
+# def delete_gmail_message():
+#     pass
 
 
 @asynccontextmanager
@@ -198,6 +222,11 @@ class Chat(BaseModel):
     search: Union[bool, None] = None
 
 
+class MailPrompt(BaseModel):
+    prompt: str
+    token: str
+
+
 class ChatBot:
     def __init__(self, llm):
         self.llm = llm
@@ -237,6 +266,22 @@ def route_tool(state: State):
 # )
 # Any time a tool is called, we return to the chatbot to decide the next step
 # graph.add_edge("tools", "chatbot")
+
+
+@app.post("/gmail")
+async def do_gmail(prompt: MailPrompt):
+    service = build("gmail", "v1", credentials=Credentials(token=prompt.token))
+    # Important comment below
+    # pylint: disable=maybe-no-member
+    # pylint: disable:R1710
+    messages = (
+        service.users()
+        .messages()
+        .list(userId="allyearmustobey@gmail.com", maxResults=5)
+        .execute()
+    )
+    print(messages)
+    return "Messages printed successfully"
 
 
 @app.post("/talk")

@@ -8,15 +8,17 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, trim_messages
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel
 from IPython.display import Image, display
-from langchain_core.tools import tool
+
 from langgraph.types import Command, interrupt
 from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.messages.utils import count_tokens_approximately
+
 from contextlib import asynccontextmanager
 from fastapi.responses import StreamingResponse
 from langchain_core.prompts import ChatPromptTemplate
@@ -35,7 +37,8 @@ import json
 import uuid
 import asyncio
 import sys
-import threading
+import pprint
+import base64
 
 
 root_path = "~"
@@ -71,9 +74,39 @@ class State(TypedDict):
 graph = StateGraph(State)
 
 
-# @lang_tool
-# def read_gmail_messages():
-#     """perform any task related to the gmail service"""
+@lang_tool
+def read_gmail_messages(token: str):
+    """Fetches and reads email messages from a user's Gmail inbox using
+    the Gmail API. Returns message metadata and content for further processing"""
+    if not token:
+        response = interrupt("a gmail token is needed to read your gmail messages")
+        if not response["token"]:
+            raise ValueError("token not provided")
+        else:
+            token = response["token"]
+
+    service = build("gmail", "v1", credentials=Credentials(token=token))
+    # Important comment below
+    # pylint: disable=maybe-no-member
+    # pylint: disable:R1710
+    messages = (
+        service.users()
+        .messages()
+        .list(userId="allyearmustobey@gmail.com", maxResults=5)
+        .execute()
+    )
+
+    msg_id = messages["messages"][0]["id"]
+    msg = (
+        service.users()
+        .messages()
+        .get(userId="allyearmustobey@gmail.com", id=msg_id, format="full")
+        .execute()
+    )
+    return get_message_body(msg)
+
+
+# print(read_gmail_messages.args_schema.model_json_schema())
 
 
 # @lang_tool
@@ -111,6 +144,16 @@ app.add_middleware(
 
 
 def sequential_thinking(state: State):
+    t_msg = trim_messages(
+        state["messages"],
+        strategy="last",
+        max_tokens=500,
+        start_on="human",
+        allow_partial=True,
+        token_counter=len,
+    )
+    if len(state["messages"]) > 2:
+        return {"messages": llm_with_tools.invoke(t_msg)}
     return {"messages": llm_with_tools.invoke(state["messages"])}
 
 
@@ -162,8 +205,8 @@ class BasicToolNode:
         outputs = []
         for tool_call in last_msg.tool_calls:
             tool_result = self.tools[tool_call["name"]].invoke(tool_call["args"])
-            if tool_call["name"] == "install_repo_mcp_server":
-                print("here again", tool_call.args_schema.schema())
+            # if tool_call["name"] == "read_gmail_messages":
+            # print("here again", tool_call.args_schema.schema(), tool_call["id"])
             outputs.append(
                 ToolMessage(
                     content=json.dumps(tool_result),
@@ -195,10 +238,15 @@ async def connect_to_mcp_server():
         ) as client:
             if client:
                 mcp_client = client
-                mcp_tools = [*client.get_tools(), *tools]
+                mcp_tools = [
+                    *client.get_tools(),
+                    *tools,
+                    TavilySearch(max_results=4),
+                    read_gmail_messages,
+                ]
                 for tool in mcp_tools:
                     print(tool.name)
-                llm_with_tools = llm.bind_tools(tools)
+                llm_with_tools = llm.bind_tools(mcp_tools)
                 graph.add_node("seq_thought", sequential_thinking)
                 graph.add_node("markdown", convert_to_markdown_node)
                 graph.add_node("tools", BasicToolNode(mcp_tools))
@@ -248,6 +296,32 @@ def route_tool(state: State):
     return END
 
 
+def get_message_body(message):
+    payload = message.get("payload", {})
+    parts = payload.get("parts", [])
+
+    def extract_part(parts):
+        for part in parts:
+            _ = part.get("mimeType")
+            body = part.get("body")
+            data = body.get("data")
+            if data:
+                enc_data = base64.urlsafe_b64decode(data).decode(encoding="utf-8")
+                return enc_data
+            elif part.get("parts"):
+                return extract_part(part["parts"])
+
+            return None
+
+    if parts:
+        return extract_part(parts)
+    data = payload.get("body", {}).get("data")
+    if data:
+        return base64.urlsafe_b64decode(data).decode
+
+    return "[No message body found]"
+
+
 # graph.add_node("tools", tool_node)
 
 # chatbot = ChatBot(llm_with_tools)
@@ -270,18 +344,59 @@ def route_tool(state: State):
 
 @app.post("/gmail")
 async def do_gmail(prompt: MailPrompt):
-    service = build("gmail", "v1", credentials=Credentials(token=prompt.token))
+    # service = build("gmail", "v1", credentials=Credentials(token=prompt.token))
     # Important comment below
     # pylint: disable=maybe-no-member
     # pylint: disable:R1710
-    messages = (
-        service.users()
-        .messages()
-        .list(userId="allyearmustobey@gmail.com", maxResults=5)
-        .execute()
+    # messages = (
+    #     service.users()
+    #     .messages()
+    #     .list(userId="allyearmustobey@gmail.com", maxResults=5)
+    #     .execute()
+    # )
+
+    # msg_id = messages["messages"][0]["id"]
+    # msg = (
+    #     service.users()
+    #     .messages()
+    #     .get(userId="allyearmustobey@gmail.com", id=msg_id, format="full")
+    #     .execute()
+    # )
+    # print(messages)
+    # pprint.pprint(msg)
+
+    # return get_message_body(msg)
+
+    gmail_prompt_template = ChatPromptTemplate.from_template(
+        """
+You are an AI assistant connected to the user's Gmail account via secure OAuth authentication. 
+Your job is to perform actions on the user's Gmail account as requested using the provided token.
+
+Available action: reading Gmail messages.
+
+When the user asks to check, read, summarize, or fetch their emails, use the appropriate tool to retrieve the messages.
+
+User Request:
+{input}
+
+Token: {token}                                                                                                                     
+"""
     )
-    print(messages)
-    return "Messages printed successfully"
+
+    chain = gmail_prompt_template | App
+    return chain.invoke(
+        {"input": prompt.prompt, "token": prompt.token},
+        {"configurable": {"thread_id": "1234"}},
+    )
+    # template = gmail_prompt_template.invoke(
+    #     {"input": prompt.prompt, "token": prompt.token}
+    # )
+
+    # res = await App.ainvoke(
+    #     {"messages": template.}, {"configurable": {"thread_id": "1234"}}
+    # )
+    # return res
+    # return res
 
 
 @app.post("/talk")

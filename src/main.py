@@ -8,7 +8,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import ToolMessage, trim_messages
+from langchain_core.messages import ToolMessage
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel
 from IPython.display import Image, display
@@ -103,7 +103,8 @@ def read_gmail_messages(token: str):
         .get(userId="allyearmustobey@gmail.com", id=msg_id, format="full")
         .execute()
     )
-    return get_message_body(msg)
+    data = get_message_body(msg)[:100]
+    return data
 
 
 # print(read_gmail_messages.args_schema.model_json_schema())
@@ -144,17 +145,9 @@ app.add_middleware(
 
 
 def sequential_thinking(state: State):
-    t_msg = trim_messages(
-        state["messages"],
-        strategy="last",
-        max_tokens=500,
-        start_on="human",
-        allow_partial=True,
-        token_counter=len,
-    )
-    if len(state["messages"]) > 2:
-        return {"messages": llm_with_tools.invoke(t_msg)}
-    return {"messages": llm_with_tools.invoke(state["messages"])}
+    result = {"messages": llm_with_tools.invoke(state["messages"])}
+    print(result)
+    return result
 
 
 def tools_cond(state: State):
@@ -344,6 +337,12 @@ def get_message_body(message):
 
 @app.post("/gmail")
 async def do_gmail(prompt: MailPrompt):
+
+    res = await App.ainvoke(
+        {"messages": [HumanMessage(prompt.prompt)]},
+        {"configurable": {"thread_id": "1234"}},
+    )
+    return res
     # service = build("gmail", "v1", credentials=Credentials(token=prompt.token))
     # Important comment below
     # pylint: disable=maybe-no-member
@@ -367,36 +366,39 @@ async def do_gmail(prompt: MailPrompt):
 
     # return get_message_body(msg)
 
-    gmail_prompt_template = ChatPromptTemplate.from_template(
-        """
-You are an AI assistant connected to the user's Gmail account via secure OAuth authentication. 
-Your job is to perform actions on the user's Gmail account as requested using the provided token.
 
-Available action: reading Gmail messages.
+#     gmail_prompt_template = ChatPromptTemplate.from_template(
+#         """
+# You are an AI assistant connected to the user's Gmail account via secure OAuth authentication.
+# Your job is to perform actions on the user's Gmail account as requested using the provided token.
+# Available action: reading Gmail messages.
+# User Request:
+# {input}
+# Token: {token}
+# """
+#     )
 
-When the user asks to check, read, summarize, or fetch their emails, use the appropriate tool to retrieve the messages.
+#     chain = gmail_prompt_template | llm_
+#     res = chain.invoke(
+#         {"input": prompt.prompt, "token": prompt.token},
+#         {"configurable": {"thread_id": "1234"}},
+#     )
 
-User Request:
-{input}
+#     return res
+#     # llm_with_tools.invoke()
+# return chain.invoke(
+#     {"input": prompt.prompt, "token": prompt.token},
+#     {"configurable": {"thread_id": "1234"}},
+# )
+# template = gmail_prompt_template.invoke(
+#     {"input": prompt.prompt, "token": prompt.token}
+# )
 
-Token: {token}                                                                                                                     
-"""
-    )
-
-    chain = gmail_prompt_template | App
-    return chain.invoke(
-        {"input": prompt.prompt, "token": prompt.token},
-        {"configurable": {"thread_id": "1234"}},
-    )
-    # template = gmail_prompt_template.invoke(
-    #     {"input": prompt.prompt, "token": prompt.token}
-    # )
-
-    # res = await App.ainvoke(
-    #     {"messages": template.}, {"configurable": {"thread_id": "1234"}}
-    # )
-    # return res
-    # return res
+# res = await App.ainvoke(
+#     {"messages": template.}, {"configurable": {"thread_id": "1234"}}
+# )
+# return res
+# return res
 
 
 @app.post("/talk")

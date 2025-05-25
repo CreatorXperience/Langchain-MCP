@@ -4,28 +4,20 @@ from fastapi import FastAPI
 from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import ToolMessage
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel
-from IPython.display import Image, display
 
 from langgraph.types import Command, interrupt
-from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_core.messages.utils import count_tokens_approximately
 
 from contextlib import asynccontextmanager
 from fastapi.responses import StreamingResponse
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.tools import tool as lang_tool
-from email.message import EmailMessage
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
@@ -34,10 +26,7 @@ import getpass
 import os
 import dotenv
 import json
-import uuid
-import asyncio
 import sys
-import pprint
 import base64
 
 
@@ -138,7 +127,6 @@ Now process this prompt:
         .execute()
     )
 
-    # msg_id = messages["messages"][2]["id"]
     msg_obj = []
     msg_data = ""
     print("and here->", messages)
@@ -161,44 +149,14 @@ Now process this prompt:
         print("and here->", messages)
 
     print(msg_data, msg_obj)
-    # template_instruction = ChatPromptTemplate.from_template(
-    #     """
-    # you're an gmail specialist, your task is to detect if the mail is a HTML Template , if the mail is HTML, output a nice \n
-    # message telling the user that the gmail message is an HTML template and also from what source it was from ,
-    # If the Input is not an HTML template \n just output the plain text as it is.
 
-    # Input: {input}
-    # """
-    # )
-    # chain = template_instruction | llm_with_tools
-    # res = chain.invoke({"input": data})
     print(msg_data)
     return msg_data
 
 
-# print(read_gmail_messages.args_schema.model_json_schema())
-
-
-# @lang_tool
-# def write_gmail_message():
-#     pass
-
-
-# @lang_tool
-# def draft_gmail_message():
-#     pass
-
-
-# @lang_tool
-# def delete_gmail_message():
-#     pass
-
-
 @asynccontextmanager
 async def lifespan(fastapp: FastAPI):
-    print("starting")
     await connect_to_mcp_server()
-    print("ending")
     global App
     App = graph.compile(checkpointer=memory)
     yield
@@ -270,8 +228,7 @@ class BasicToolNode:
         outputs = []
         for tool_call in last_msg.tool_calls:
             tool_result = self.tools[tool_call["name"]].invoke(tool_call["args"])
-            # if tool_call["name"] == "read_gmail_messages":
-            # print("here again", tool_call.args_schema.schema(), tool_call["id"])
+
             outputs.append(
                 ToolMessage(
                     content=json.dumps(tool_result),
@@ -281,9 +238,6 @@ class BasicToolNode:
             )
 
         return {"messages": outputs}
-
-
-# tool_node = BasicToolNode(tools)
 
 
 async def connect_to_mcp_server():
@@ -387,26 +341,6 @@ def get_message_body(message):
     return "[No message body found]"
 
 
-# graph.add_node("tools", tool_node)
-
-# chatbot = ChatBot(llm_with_tools)
-# graph.add_node("chatbot", chatbot)
-
-
-# graph.add_conditional_edges(
-#     "chatbot",
-#     route_tool,
-#     # The following dictionary lets you tell the graph to interpret the condition's outputs as a specific node
-#     # It defaults to the identity function, but if you
-#     # want to use a node named something else apart from "tools",
-#     # You can update the value of the dictionary to something else
-#     # e.g., "tools": "my_tools"
-#     {"tools": "tools", END: END},
-# )
-# Any time a tool is called, we return to the chatbot to decide the next step
-# graph.add_edge("tools", "chatbot")
-
-
 @app.post("/gmail")
 async def do_gmail(prompt: MailPrompt):
 
@@ -415,62 +349,6 @@ async def do_gmail(prompt: MailPrompt):
         {"configurable": {"thread_id": "1234"}},
     )
     return res
-    # service = build("gmail", "v1", credentials=Credentials(token=prompt.token))
-    # Important comment below
-    # pylint: disable=maybe-no-member
-    # pylint: disable:R1710
-    # messages = (
-    #     service.users()
-    #     .messages()
-    #     .list(userId="allyearmustobey@gmail.com", maxResults=5)
-    #     .execute()
-    # )
-
-    # msg_id = messages["messages"][0]["id"]
-    # msg = (
-    #     service.users()
-    #     .messages()
-    #     .get(userId="allyearmustobey@gmail.com", id=msg_id, format="full")
-    #     .execute()
-    # )
-    # print(messages)
-    # pprint.pprint(msg)
-
-    # return get_message_body(msg)
-
-
-#     gmail_prompt_template = ChatPromptTemplate.from_template(
-#         """
-# You are an AI assistant connected to the user's Gmail account via secure OAuth authentication.
-# Your job is to perform actions on the user's Gmail account as requested using the provided token.
-# Available action: reading Gmail messages.
-# User Request:
-# {input}
-# Token: {token}
-# """
-#     )
-
-#     chain = gmail_prompt_template | llm_
-#     res = chain.invoke(
-#         {"input": prompt.prompt, "token": prompt.token},
-#         {"configurable": {"thread_id": "1234"}},
-#     )
-
-#     return res
-#     # llm_with_tools.invoke()
-# return chain.invoke(
-#     {"input": prompt.prompt, "token": prompt.token},
-#     {"configurable": {"thread_id": "1234"}},
-# )
-# template = gmail_prompt_template.invoke(
-#     {"input": prompt.prompt, "token": prompt.token}
-# )
-
-# res = await App.ainvoke(
-#     {"messages": template.}, {"configurable": {"thread_id": "1234"}}
-# )
-# return res
-# return res
 
 
 @app.post("/talk")

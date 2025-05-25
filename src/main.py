@@ -75,9 +75,11 @@ graph = StateGraph(State)
 
 
 @lang_tool
-def read_gmail_messages(token: str):
+def read_gmail_messages(
+    token: str, task: Annotated[str, "what the user says says you should do"]
+):
     """Fetches and reads email messages from a user's Gmail inbox using
-    the Gmail API. Returns message metadata and content for further processing"""
+    the Gmail API. Returns message content for further processing"""
     if not token:
         response = interrupt("a gmail token is needed to read your gmail messages")
         if not response["token"]:
@@ -89,22 +91,89 @@ def read_gmail_messages(token: str):
     # Important comment below
     # pylint: disable=maybe-no-member
     # pylint: disable:R1710
+    query_template = ChatPromptTemplate.from_template(
+        """ 
+    You are an expert email assistant. Your task is to formulate a Gmail-compatible search query string based on the user's request.
+
+Use Gmail's search syntax. You may combine operators when needed. Do not return any explanation—just the Gmail search query string.
+
+Here are the Gmail search operators you may use:
+
+| Operator           | Description                                      | Example                        |
+|--------------------|--------------------------------------------------|--------------------------------|
+| `from:`            | Sender's email or domain                         | `from:amazon.com`              |
+| `to:`              | Recipient's email                                | `to:john@example.com`          |
+| `subject:`         | Words in the subject line                        | `subject:invoice`              |
+| `label:`           | Messages with a specific label                   | `label:work`                   |
+| `is:unread`        | Unread emails only                               | `is:unread`                    |
+| `is:read`          | Read emails only                                 | `is:read`                      |
+| `has:attachment`   | Emails with attachments                          | `has:attachment`               |
+| `newer_than:Xd`    | Emails newer than X days                         | `newer_than:7d`                |
+| `older_than:Xd`    | Emails older than X days                         | `older_than:30d`               |
+| `filename:`        | Emails with specific file types                  | `filename:pdf`                 |
+| `after:YYYY/MM/DD` | Emails after a specific date                     | `after:2023/01/01`             |
+| `before:YYYY/MM/DD`| Emails before a specific date                    | `before:2023/01/31`            |
+
+Return only the Gmail search query that matches the user's request.
+
+Example:
+User prompt: *"Find unread emails from Google with PDF attachments in the last 3 days"*
+Your output: `from:google.com is:unread has:attachment filename:pdf newer_than:3d`
+
+---
+
+Now process this prompt:
+{task}
+
+    """
+    )
+    chain = query_template | llm_with_tools
+    res = chain.invoke({"task": task})
+    query = res.content
+    print(query)
     messages = (
         service.users()
         .messages()
-        .list(userId="allyearmustobey@gmail.com", maxResults=5)
+        .list(userId="allyearmustobey@gmail.com", maxResults=2, q=query)
         .execute()
     )
 
-    msg_id = messages["messages"][0]["id"]
-    msg = (
-        service.users()
-        .messages()
-        .get(userId="allyearmustobey@gmail.com", id=msg_id, format="full")
-        .execute()
-    )
-    data = get_message_body(msg)[:100]
-    return data
+    # msg_id = messages["messages"][2]["id"]
+    msg_obj = []
+    msg_data = ""
+    print("and here->", messages)
+    if "messages" in messages:
+        for message in messages["messages"]:
+            msg = (
+                service.users()
+                .messages()
+                .get(
+                    userId="allyearmustobey@gmail.com", id=message["id"], format="full"
+                )
+                .execute()
+            )
+            msg_obj.append(msg)
+        print(msg_obj)
+        for idx, mg in enumerate(msg_obj):
+            data = get_message_body(mg)[:400]
+            msg_data += f"\nmsg ${idx} \n ${data}"
+    else:
+        print("and here->", messages)
+
+    print(msg_data, msg_obj)
+    # template_instruction = ChatPromptTemplate.from_template(
+    #     """
+    # you're an gmail specialist, your task is to detect if the mail is a HTML Template , if the mail is HTML, output a nice \n
+    # message telling the user that the gmail message is an HTML template and also from what source it was from ,
+    # If the Input is not an HTML template \n just output the plain text as it is.
+
+    # Input: {input}
+    # """
+    # )
+    # chain = template_instruction | llm_with_tools
+    # res = chain.invoke({"input": data})
+    print(msg_data)
+    return msg_data
 
 
 # print(read_gmail_messages.args_schema.model_json_schema())
@@ -126,8 +195,10 @@ def read_gmail_messages(token: str):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapp: FastAPI):
+    print("starting")
     await connect_to_mcp_server()
+    print("ending")
     global App
     App = graph.compile(checkpointer=memory)
     yield
@@ -145,6 +216,7 @@ app.add_middleware(
 
 
 def sequential_thinking(state: State):
+    print("here- >", state["messages"])
     result = {"messages": llm_with_tools.invoke(state["messages"])}
     print(result)
     return result
@@ -310,7 +382,7 @@ def get_message_body(message):
         return extract_part(parts)
     data = payload.get("body", {}).get("data")
     if data:
-        return base64.urlsafe_b64decode(data).decode
+        return base64.urlsafe_b64decode(data).decode(encoding="utf-8")
 
     return "[No message body found]"
 

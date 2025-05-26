@@ -20,6 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.tools import tool as lang_tool
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
+from bs4 import BeautifulSoup
+from email.message import EmailMessage
+from googleapiclient.errors import HttpError
 
 import subprocess
 import getpass
@@ -50,7 +53,7 @@ if not os.environ.get("GROQ_API_KEY") and val:
     sys.exit(2)
 else:
     print("loaded env variable")
-    llm = init_chat_model(model="llama3-8b-8192", model_provider="groq", api_key=val)
+    llm = init_chat_model(model="llama3-70b-8192", model_provider="groq", api_key=val)
 
 
 memory = MemorySaver()
@@ -61,6 +64,41 @@ class State(TypedDict):
 
 
 graph = StateGraph(State)
+
+
+@lang_tool
+def draft_email_messages(
+    token: Annotated[str, "token or key to authenticate to gmail service"],
+    to: Annotated[str, "email message recipient"],
+    subject: Annotated[str, "Subject of the message"],
+):
+    """Draft an email message using the Gmail API"""
+    try:
+        service = build("gmail", "v1", credentials=Credentials(token=token))
+
+        message = EmailMessage()
+        message.set_content("This is Aura drafted Message")
+        message["To"] = to
+        message["From"] = "allyearmustobey@gmail.com"
+        message["Subject"] = subject
+        msg_bytes = message.as_bytes()
+
+        encoded_msg = base64.urlsafe_b64encode(msg_bytes).decode()
+        create_message = {"message": {"raw": encoded_msg}}
+
+        # Important comment below
+        # pylint: disable=maybe-no-member
+        # pylint: disable:R1710
+
+        draft = (
+            service.users().drafts().create(userId="me", body=create_message).execute()
+        )
+
+        msg = f"message with Draft Id: {draft["id"]} drafted successfully"
+        print(msg)
+        return msg
+    except HttpError as error:
+        print(f"error occured while drafting message Error-> {error}")
 
 
 @lang_tool
@@ -123,7 +161,7 @@ Now process this prompt:
     messages = (
         service.users()
         .messages()
-        .list(userId="allyearmustobey@gmail.com", maxResults=2, q=query)
+        .list(userId="allyearmustobey@gmail.com", maxResults=1, q=query)
         .execute()
     )
 
@@ -143,15 +181,20 @@ Now process this prompt:
             msg_obj.append(msg)
         print(msg_obj)
         for idx, mg in enumerate(msg_obj):
-            data = get_message_body(mg)[:400]
-            msg_data += f"\nmsg ${idx} \n ${data}"
+            data = get_message_body(mg)
+            msg_data += f"\nMessage {idx+1}: \n {data}"
     else:
         print("and here->", messages)
 
     print(msg_data, msg_obj)
 
-    print(msg_data)
-    return msg_data
+    unescaped_data = (
+        msg_data.replace("\\r\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+    )
+    soup = BeautifulSoup(unescaped_data, "html.parser")
+    text = soup.get_text(separator="\n", strip=True)
+    print(text)
+    return text
 
 
 @asynccontextmanager
@@ -198,7 +241,7 @@ def convert_to_markdown_node(state: State):
     msg = state["messages"]
 
     template_prompt = """
-    Convert the following text to properly formatted Markdown. Do not include any explanations or introductory phrases. Output only the converted Markdown:
+    Convert the following text to properly formatted Markdown only if is code, if it's not,  output the text as it is. Do not include any explanations or introductory phrases. Output only the converted Markdown:
     Text: {text}
     """
 
@@ -262,6 +305,7 @@ async def connect_to_mcp_server():
                     *tools,
                     TavilySearch(max_results=4),
                     read_gmail_messages,
+                    draft_email_messages,
                 ]
                 for tool in mcp_tools:
                     print(tool.name)
@@ -291,7 +335,6 @@ class Chat(BaseModel):
 
 class MailPrompt(BaseModel):
     prompt: str
-    token: str
 
 
 class ChatBot:
@@ -348,13 +391,12 @@ async def do_gmail(prompt: MailPrompt):
         {"messages": [HumanMessage(prompt.prompt)]},
         {"configurable": {"thread_id": "1234"}},
     )
-    return res
+    return res["messages"][-1].content
 
 
 @app.post("/talk")
 async def talk(chat: Chat):
 
-    value = ""
     msg = [HumanMessage(chat.text)]
 
     # human_command = Command(resume={"data": human_response})
